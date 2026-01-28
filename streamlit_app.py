@@ -4,17 +4,23 @@ import json
 import hashlib
 import difflib
 from itertools import combinations
-import os
+import io
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Little KITES Forensics", page_icon="🔍")
+# --- Page Config ---
+st.set_page_config(
+    page_title="Little KITES Forensics",
+    page_icon="🕵️‍♂️",
+    layout="wide"
+)
 
-st.title("🔍 Scratch Plagiarism Detector")
+# --- Custom CSS for KITE Look ---
 st.markdown("""
-**Upload multiple `.sb3` files** to check for:
-1. **Exact Copies:** Students who just renamed the file.
-2. **Logic Clones:** Students who copied the code but changed sprites/names.
-""")
+    <style>
+    .main {background-color: #f0f2f6;}
+    .stButton>button {width: 100%; border-radius: 5px; height: 3em;}
+    .report-box {background-color: white; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b;}
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- Logic Functions ---
 def get_file_hash(bytes_data):
@@ -23,20 +29,26 @@ def get_file_hash(bytes_data):
 def extract_project_data(bytes_data):
     logic_signature = []
     asset_hashes = set()
+    sprite_names = []
     
     try:
         with zipfile.ZipFile(bytes_data) as z:
+            # 1. Asset Analysis
             for filename in z.namelist():
                 if filename != 'project.json':
                     data = z.read(filename)
                     asset_hashes.add(hashlib.md5(data).hexdigest())
 
+            # 2. Logic Analysis
             if 'project.json' in z.namelist():
                 project = json.loads(z.read('project.json'))
                 targets = project.get('targets', [])
-                targets.sort(key=lambda x: x.get('name', '')) # Sort by name
+                
+                # Sort to ignore sprite order changes
+                targets.sort(key=lambda x: x.get('name', '')) 
 
                 for target in targets:
+                    sprite_names.append(target.get('name', 'Unknown'))
                     blocks = target.get('blocks', {})
                     if isinstance(blocks, dict):
                         for block in blocks.values():
@@ -44,76 +56,112 @@ def extract_project_data(bytes_data):
                                 opcode = block.get('opcode', 'unknown')
                                 logic_signature.append(opcode)
     except Exception:
-        return None, None
+        return None, None, None
 
-    return "\n".join(logic_signature), asset_hashes
+    return "\n".join(logic_signature), asset_hashes, sprite_names
 
-# --- The Web Interface ---
-uploaded_files = st.file_uploader("Upload .sb3 files here", type="sb3", accept_multiple_files=True)
+# --- Sidebar ---
+with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/0/0a/Python.svg/1200px-Python.svg.png", width=50)
+    st.title("Forensics Controls")
+    
+    st.markdown("### ⚙️ Settings")
+    similarity_threshold = st.slider("Similarity Threshold (%)", 50, 100, 85)
+    min_assets = st.slider("Min Shared Assets", 1, 10, 3)
+    
+    st.info("""
+    **How to use:**
+    1. Upload all .sb3 files.
+    2. Check the 'Binary Check' tab for exact copies.
+    3. Check 'Deep Analysis' for modified copies.
+    4. Download the report.
+    """)
+    st.markdown("---")
+    st.caption("Developed for Little KITES")
+
+# --- Main Interface ---
+st.title("🕵️‍♂️ Scratch Plagiarism Detector")
+st.markdown("### Digital Forensics Tool for Assignment Evaluation")
+
+uploaded_files = st.file_uploader("Drop Student Assignments Here (.sb3)", type="sb3", accept_multiple_files=True)
 
 if uploaded_files:
     if len(uploaded_files) < 2:
-        st.warning("Please upload at least 2 files to compare.")
+        st.warning("⚠️ Please upload at least 2 files to perform a comparison.")
     else:
-        st.success(f"Processing {len(uploaded_files)} files...")
-        
-        file_data = {}
-        
-        # 1. Process Files
-        for uploaded_file in uploaded_files:
-            bytes_data = uploaded_file
-            fname = uploaded_file.name
+        # --- Processing Indicator ---
+        with st.spinner(f"Analyzing {len(uploaded_files)} files..."):
+            file_data = {}
+            report_lines = []
             
-            h = get_file_hash(bytes_data)
-            l, a = extract_project_data(bytes_data)
-            
-            if l is not None:
-                file_data[fname] = {'hash': h, 'logic': l, 'assets': a}
-            else:
-                st.error(f"Error reading {fname}")
+            # 1. Extraction Phase
+            for uploaded_file in uploaded_files:
+                bytes_data = uploaded_file
+                fname = uploaded_file.name
+                h = get_file_hash(bytes_data)
+                l, a, s = extract_project_data(bytes_data)
+                
+                if l is not None:
+                    file_data[fname] = {'hash': h, 'logic': l, 'assets': a, 'sprites': s}
+                else:
+                    st.toast(f"Error reading {fname}", icon="❌")
 
-        # 2. Check Exact Duplicates
-        st.subheader("1. Exact Binary Copies (Renamed Files)")
-        seen_hashes = {}
-        duplicates = []
-        
-        for name, data in file_data.items():
-            h = data['hash']
-            if h in seen_hashes:
-                duplicates.append(f"🚨 **{name}** is an exact copy of **{seen_hashes[h]}**")
-            else:
-                seen_hashes[h] = name
-        
-        if duplicates:
-            for d in duplicates: st.write(d)
-        else:
-            st.info("No exact binary duplicates found.")
+            # --- TABS LAYOUT ---
+            tab1, tab2, tab3 = st.tabs(["⚡ Binary Check", "🧠 Deep Logic Analysis", "📂 Evidence Report"])
 
-        # 3. Deep Logic Analysis
-        st.subheader("2. Smart Logic Analysis (Code Structure)")
-        
-        pairs = list(combinations(file_data.keys(), 2))
-        suspicious_pairs = []
+            # --- TAB 1: Exact Binary Duplicates ---
+            with tab1:
+                st.subheader("Phase 1: Exact File Duplicates")
+                st.caption("Students who simply renamed the file without opening it.")
+                
+                seen_hashes = {}
+                duplicates = []
+                
+                for name, data in file_data.items():
+                    h = data['hash']
+                    if h in seen_hashes:
+                        duplicates.append((name, seen_hashes[h]))
+                    else:
+                        seen_hashes[h] = name
+                
+                if duplicates:
+                    for copy, original in duplicates:
+                        st.error(f"🚨 **MATCH FOUND:** `{copy}` is a binary copy of `{original}`")
+                        report_lines.append(f"[BINARY MATCH] {copy} == {original}")
+                else:
+                    st.success("✅ No exact binary duplicates found.")
 
-        for n1, n2 in pairs:
-            d1, d2 = file_data[n1], file_data[n2]
-            
-            # Logic Similarity
-            matcher = difflib.SequenceMatcher(None, d1['logic'], d2['logic'])
-            sim = matcher.ratio() * 100
-            
-            # Asset Similarity
-            shared = len(d1['assets'].intersection(d2['assets']))
-            
-            if sim > 85.0 or shared > 3:
-                suspicious_pairs.append({
-                    "Student A": n1,
-                    "Student B": n2,
-                    "Similarity": f"{sim:.1f}%",
-                    "Notes": f"Shared {shared} Assets" if shared > 3 else "High Code Match"
-                })
-
-        if suspicious_pairs:
-            st.table(suspicious_pairs)
-        else:
-            st.success("No suspicious logic similarities found.")
+            # --- TAB 2: Deep Logic Analysis ---
+            with tab2:
+                st.subheader("Phase 2: Code Logic & Asset Forensics")
+                st.caption(f"Flagging pairs with >{similarity_threshold}% code similarity.")
+                
+                pairs = list(combinations(file_data.keys(), 2))
+                suspicious_found = False
+                
+                for n1, n2 in pairs:
+                    d1, d2 = file_data[n1], file_data[n2]
+                    
+                    # Logic Check
+                    matcher = difflib.SequenceMatcher(None, d1['logic'], d2['logic'])
+                    sim = matcher.ratio() * 100
+                    
+                    # Asset Check
+                    shared_assets = d1['assets'].intersection(d2['assets'])
+                    shared_count = len(shared_assets)
+                    
+                    # Flags
+                    is_logic_match = sim >= similarity_threshold
+                    is_asset_match = shared_count >= min_assets
+                    
+                    if is_logic_match or is_asset_match:
+                        suspicious_found = True
+                        
+                        # Visual Report Box
+                        with st.expander(f"⚠️ {n1} vs {n2} ({sim:.1f}%)", expanded=True):
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.metric("Logic Similarity", f"{sim:.1f}%")
+                            with col2:
+                                st.metric("Shared Assets", f"{shared_
