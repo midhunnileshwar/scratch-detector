@@ -7,6 +7,7 @@ from itertools import combinations
 import io
 from PIL import Image
 import imagehash
+import os
 
 # --- Page Config ---
 st.set_page_config(
@@ -34,19 +35,17 @@ def get_image_phash(image_file):
     """Perceptual Hash (Visual Similarity Check)"""
     try:
         img = Image.open(image_file)
-        # phash is excellent for finding modified/resized images
         return imagehash.phash(img)
     except:
         return None
 
-def extract_project_data(bytes_data, filename):
-    """Extracts Logic from .sb3 and .p3b (Pictoblox) files"""
+def extract_project_data(bytes_data):
+    """Extracts Logic from .sb3 and .p3b files"""
     logic_signature = []
     asset_hashes = set()
     sprite_names = []
     
     try:
-        # Pictoblox and Scratch are both ZIPs
         with zipfile.ZipFile(bytes_data) as z:
             # 1. Internal Asset Analysis
             for f in z.namelist():
@@ -73,146 +72,167 @@ def extract_project_data(bytes_data, filename):
 
     return "\n".join(logic_signature), asset_hashes, sprite_names
 
+def determine_student_name(path):
+    """
+    Intelligent Naming:
+    - School/Abhishek/Assignment.sb3 -> 'Abhishek'
+    - School/Abhishek.sb3 -> 'Abhishek'
+    """
+    parts = path.replace("\\", "/").split("/")
+    filename = parts[-1]
+    
+    # If file is inside a folder (e.g., 'Abhishek/game.sb3')
+    if len(parts) > 1:
+        # Check if filename is generic
+        if any(x in filename.lower() for x in ['assignment', 'project', 'untitled', 'game', 'activity']):
+            return parts[-2] # Return folder name (e.g. 'Abhishek')
+            
+    # Default: return filename without extension
+    return os.path.splitext(filename)[0]
+
 # --- Sidebar ---
 with st.sidebar:
     st.title("🕵️‍♂️ Forensics Controls")
     
     st.markdown("### ⚙️ Thresholds")
     code_sim_threshold = st.slider("Code Similarity (%)", 50, 100, 85)
-    visual_sim_threshold = st.slider("Image Similarity (Diff)", 0, 20, 10, help="Lower is stricter. 0 = Exact, 10 = Similar")
+    visual_sim_threshold = st.slider("Image Similarity", 0, 20, 10)
     
     st.info("""
-    **Supported Files:**
-    * 🐱 Scratch (`.sb3`)
-    * 🤖 Pictoblox (`.p3b`)
-    * 🖼️ Images (`.jpg`, `.png`)
+    **New! Folder Support**
+    For best results, right-click the
+    School folder -> **Compress to Zip**.
+    Upload that single `.zip` file!
     """)
-    st.caption("v3.0 - Visual & Logic Core")
+    st.caption("v4.0 - Nested Folder Support")
 
 # --- Main UI ---
 st.title("Little KITES Forensics Suite")
 st.markdown("### 🤖 Pictoblox, Scratch & Digital Poster Analysis")
 
 uploaded_files = st.file_uploader(
-    "Upload Assignments (.sb3, .p3b, .png, .jpg)", 
-    type=["sb3", "p3b", "png", "jpg", "jpeg"], 
+    "Upload Assignments (Individual files OR School Folder as .zip)", 
+    type=["sb3", "p3b", "png", "jpg", "jpeg", "zip"], 
     accept_multiple_files=True
 )
 
 if uploaded_files:
-    if len(uploaded_files) < 2:
-        st.warning("⚠️ Upload at least 2 files to compare.")
-    else:
-        with st.spinner(f"Analyzing {len(uploaded_files)} files..."):
-            
-            # --- Categorize Files ---
-            project_files = {} # for sb3/p3b
-            image_files = {}   # for png/jpg
-            
-            for f in uploaded_files:
-                ext = f.name.split('.')[-1].lower()
-                f.seek(0) # Reset pointer
+    with st.spinner("Unpacking and analyzing..."):
+        
+        project_files = {} 
+        image_files = {}   
+        
+        for up_file in uploaded_files:
+            # === HANDLING ZIP FOLDERS ===
+            if up_file.name.endswith(".zip"):
+                try:
+                    with zipfile.ZipFile(up_file) as z:
+                        for filename in z.namelist():
+                            # Skip MacOS hidden folder trash
+                            if "__MACOSX" in filename or filename.startswith("."):
+                                continue
+                            
+                            # Identify File Type
+                            ext = filename.split('.')[-1].lower()
+                            
+                            # Process Projects inside Zip
+                            if ext in ['sb3', 'p3b']:
+                                file_bytes = io.BytesIO(z.read(filename))
+                                student_name = determine_student_name(filename)
+                                
+                                h = get_file_hash(file_bytes.getvalue())
+                                l, a, s = extract_project_data(file_bytes)
+                                
+                                if l:
+                                    # Handle duplicate names by appending count
+                                    if student_name in project_files:
+                                        student_name = f"{student_name}_{len(project_files)}"
+                                    
+                                    project_files[student_name] = {'hash': h, 'logic': l, 'assets': a, 'sprites': s}
+
+                            # Process Images inside Zip
+                            elif ext in ['png', 'jpg', 'jpeg']:
+                                file_bytes = io.BytesIO(z.read(filename))
+                                student_name = determine_student_name(filename)
+                                
+                                h = get_file_hash(file_bytes.getvalue())
+                                ph = get_image_phash(file_bytes)
+                                
+                                if ph:
+                                    if student_name in image_files:
+                                        student_name = f"{student_name}_{len(image_files)}"
+                                    image_files[student_name] = {'hash': h, 'phash': ph, 'obj': file_bytes}
+                except:
+                    st.error(f"Failed to unzip {up_file.name}")
+
+            # === HANDLING INDIVIDUAL FILES ===
+            else:
+                ext = up_file.name.split('.')[-1].lower()
+                student_name = os.path.splitext(up_file.name)[0]
+                up_file.seek(0)
                 
                 if ext in ['sb3', 'p3b']:
-                    h = get_file_hash(f.getvalue())
-                    l, a, s = extract_project_data(f, f.name)
-                    if l is not None:
-                        project_files[f.name] = {'hash': h, 'logic': l, 'assets': a, 'sprites': s}
+                    h = get_file_hash(up_file.getvalue())
+                    l, a, s = extract_project_data(up_file)
+                    if l:
+                        project_files[student_name] = {'hash': h, 'logic': l, 'assets': a, 'sprites': s}
                 
                 elif ext in ['png', 'jpg', 'jpeg']:
-                    h = get_file_hash(f.getvalue()) # Binary hash
-                    ph = get_image_phash(f)         # Visual hash
+                    h = get_file_hash(up_file.getvalue())
+                    ph = get_image_phash(up_file)
                     if ph:
-                        image_files[f.name] = {'hash': h, 'phash': ph, 'obj': f}
+                        image_files[student_name] = {'hash': h, 'phash': ph, 'obj': up_file}
 
-            # --- TABS ---
-            tab1, tab2, tab3 = st.tabs(["💻 Code/Project Analysis", "🖼️ Visual Forensics (Posters)", "📊 Full Report"])
+        # --- TABS ---
+        tab1, tab2, tab3 = st.tabs(["💻 Code/Project Analysis", "🖼️ Visual Forensics", "📄 Report"])
 
-            # ==========================
-            # TAB 1: CODE & PROJECTS
-            # ==========================
-            with tab1:
-                st.subheader("Scratch & Pictoblox Assessment")
-                if len(project_files) < 2:
-                    st.info("Not enough project files (.sb3/.p3b) to compare.")
-                else:
-                    pairs = list(combinations(project_files.keys(), 2))
-                    found_issues = False
+        # TAB 1: CODE
+        with tab1:
+            if len(project_files) < 2:
+                st.info("Upload at least 2 project files (or a Zip with multiple projects).")
+            else:
+                pairs = list(combinations(project_files.keys(), 2))
+                found = False
+                for n1, n2 in pairs:
+                    d1, d2 = project_files[n1], project_files[n2]
                     
-                    for n1, n2 in pairs:
-                        d1, d2 = project_files[n1], project_files[n2]
-                        
-                        # 1. Exact Binary Check
-                        if d1['hash'] == d2['hash']:
-                            st.error(f"🚨 **EXACT COPY:** `{n1}` is identical to `{n2}`")
-                            found_issues = True
-                            continue
+                    if d1['hash'] == d2['hash']:
+                        st.error(f"🚨 **EXACT COPY:** `{n1}` == `{n2}`")
+                        found = True
+                        continue
 
-                        # 2. Logic Check
-                        matcher = difflib.SequenceMatcher(None, d1['logic'], d2['logic'])
-                        sim = matcher.ratio() * 100
-                        shared_assets = len(d1['assets'].intersection(d2['assets']))
-                        
-                        if sim >= code_sim_threshold:
-                            found_issues = True
-                            with st.expander(f"⚠️ {n1} vs {n2} (Logic: {sim:.1f}%)", expanded=True):
-                                c1, c2, c3 = st.columns(3)
-                                c1.metric("Code Similarity", f"{sim:.1f}%")
-                                c2.metric("Shared Assets", f"{shared_assets}")
-                                c3.metric("Sprite Count", f"{len(d1['sprites'])} / {len(d2['sprites'])}")
-                                
-                                if "Pictoblox" in d1['logic'] or "Pictoblox" in d2['logic']:
-                                    st.caption("🤖 Pictoblox extensions detected.")
-
-                    if not found_issues:
-                        st.success("✅ No code plagiarism detected.")
-
-            # ==========================
-            # TAB 2: VISUAL FORENSICS
-            # ==========================
-            with tab2:
-                st.subheader("Digital Poster & Image Analysis")
-                st.caption("Uses AI Vision to detect images that look similar, even if renamed or resized.")
-                
-                if len(image_files) < 2:
-                    st.info("Not enough image files to compare.")
-                else:
-                    img_pairs = list(combinations(image_files.keys(), 2))
-                    visual_issues = False
+                    matcher = difflib.SequenceMatcher(None, d1['logic'], d2['logic'])
+                    sim = matcher.ratio() * 100
                     
-                    for n1, n2 in img_pairs:
-                        d1, d2 = image_files[n1], image_files[n2]
-                        
-                        # 1. Exact Binary Match
-                        if d1['hash'] == d2['hash']:
-                            st.error(f"🚨 **EXACT DUPLICATE:** `{n1}` == `{n2}` (Binary Match)")
-                            visual_issues = True
-                            continue
-                            
-                        # 2. Visual Similarity (Perceptual Hash)
-                        # The difference between hashes tells us how different the images look
-                        diff = d1['phash'] - d2['phash']
-                        
-                        if diff <= visual_sim_threshold:
-                            visual_issues = True
-                            st.markdown(f"**⚠️ Visual Match Found:** `{n1}` vs `{n2}`")
-                            
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                st.image(d1['obj'], caption=n1, use_container_width=True)
-                            with col_b:
-                                st.image(d2['obj'], caption=n2, use_container_width=True)
-                            
-                            st.caption(f"Visual Difference Score: {diff} (Lower is more similar)")
-                            st.divider()
+                    if sim >= code_sim_threshold:
+                        found = True
+                        with st.expander(f"⚠️ {n1} vs {n2} ({sim:.1f}%)", expanded=True):
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Similarity", f"{sim:.1f}%")
+                            c2.metric("Assets", f"{len(d1['assets'].intersection(d2['assets']))}")
+                            c3.metric("Sprites", f"{len(d1['sprites'])} / {len(d2['sprites'])}")
+                if not found: st.success("No code plagiarism detected.")
 
-                    if not visual_issues:
-                        st.success("✅ No suspicious images found.")
-
-            # ==========================
-            # TAB 3: REPORT
-            # ==========================
-            with tab3:
-                st.write("Generate a text summary of all findings above.")
-                if st.button("📄 Generate Report Log"):
-                    st.text("Processing complete. (Use screenshots of tabs above for evidence).")
+        # TAB 2: VISUAL
+        with tab2:
+            if len(image_files) < 2:
+                st.info("Upload at least 2 images.")
+            else:
+                pairs = list(combinations(image_files.keys(), 2))
+                found = False
+                for n1, n2 in pairs:
+                    d1, d2 = image_files[n1], image_files[n2]
+                    
+                    diff = d1['phash'] - d2['phash']
+                    if diff <= visual_sim_threshold:
+                        found = True
+                        st.markdown(f"**⚠️ Visual Match:** `{n1}` vs `{n2}`")
+                        c1, c2 = st.columns(2)
+                        c1.image(d1['obj'], caption=n1)
+                        c2.image(d2['obj'], caption=n2)
+                        st.divider()
+                if not found: st.success("No suspicious images.")
+        
+        # TAB 3: REPORT
+        with tab3:
+             st.write("Use screenshots of previous tabs for evidence.")
