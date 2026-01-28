@@ -77,7 +77,7 @@ with st.sidebar:
     4. Download the report.
     """)
     st.markdown("---")
-    st.caption("Developed for Little KITES")
+    st.caption("Developed for KITE KASARGOD")
 
 # --- Main Interface ---
 st.title("🕵️‍♂️ Scratch Plagiarism Detector")
