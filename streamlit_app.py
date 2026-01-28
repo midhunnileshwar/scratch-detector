@@ -319,7 +319,7 @@ else:
     # Empty State (Welcome Screen)
     st.markdown("""
     <div style='text-align: center; padding: 50px; color: #7f8c8d;'>
-        <h3>👋 Welcome, Midhun Sir!</h3>
+        <h3>👋 Welcome!</h3>
         <p>Upload a <b>ZIP file</b> of the class folder to begin analysis.</p>
     </div>
     """, unsafe_allow_html=True)
