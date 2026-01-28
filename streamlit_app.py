@@ -164,4 +164,35 @@ if uploaded_files:
                             with col1:
                                 st.metric("Logic Similarity", f"{sim:.1f}%")
                             with col2:
-                                st.metric("Shared Assets", f"{shared_
+                                st.metric("Shared Assets", f"{shared_count} files")
+                            with col3:
+                                # Show sprite count difference
+                                s1_count = len(d1['sprites'])
+                                s2_count = len(d2['sprites'])
+                                st.metric("Sprite Count", f"{s1_count} / {s2_count}")
+                                
+                            if is_asset_match:
+                                st.warning(f"🎨 These students share {shared_count} identical custom images/sounds.")
+                            
+                            # Add to downloadable report
+                            report_lines.append(f"[LOGIC MATCH] {n1} vs {n2} | Similarity: {sim:.1f}% | Shared Assets: {shared_count}")
+
+                if not suspicious_found:
+                    st.success("✨ No suspicious logic similarities detected.")
+
+            # --- TAB 3: Download Report ---
+            with tab3:
+                st.subheader("Generated Forensics Report")
+                
+                report_text = "\n".join(report_lines)
+                if not report_text:
+                    report_text = "No plagiarism detected in this batch."
+                    
+                st.text_area("Log Preview", report_text, height=300)
+                
+                st.download_button(
+                    label="📥 Download Full Report (.txt)",
+                    data="LITTLE KITES PLAGIARISM REPORT\n------------------------------\n" + report_text,
+                    file_name="plagiarism_report.txt",
+                    mime="text/plain"
+                )
