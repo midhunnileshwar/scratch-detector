@@ -179,7 +179,7 @@ with st.sidebar:
         st.experimental_rerun()
 
 # --- 6. MAIN INTERFACE ---
-st.title("🛡️ Little KITES Forensics Suite")
+st.title("🛡️ Forensics Suite")
 st.markdown("#### Advanced Analysis for Scratch, Pictoblox, Posters & Videos")
 
 # Upload Area
