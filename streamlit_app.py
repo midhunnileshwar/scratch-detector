@@ -10,6 +10,15 @@ import numpy as np
 from PIL import Image
 from itertools import combinations
 
+# ==========================================
+# 🔐 ADMIN CONFIGURATION (ONLY FOR MIDHUN)
+# ==========================================
+# Paste your AI API Key inside the quotes below.
+# If you don't have one yet, leave it empty (""). 
+# The tool will still work using Offline AI (OpenCV).
+AI_API_KEY = "AIzaSyAfkPhAADiOwuwojxIhTvP59V_4AETW02U"  
+# ==========================================
+
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="KITE Forensics Master",
@@ -18,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- SESSION STATE (Fixes the "Report Not Generating" issue) ---
+# --- SESSION STATE ---
 if 'report_log' not in st.session_state:
     st.session_state.report_log = []
 
@@ -78,7 +87,6 @@ def extract_project_code(bytes_data, is_pictoblox=False):
                 try:
                     project = json.loads(raw_json)
                 except json.JSONDecodeError:
-                    # Fallback: If JSON is corrupt, try to read as text strings (Desperate Mode)
                     return "ERROR_JSON_PARSE", assets, 0
                 
                 targets = project.get('targets', [])
@@ -112,7 +120,6 @@ def extract_owner_name(filepath):
     
     # If file is deep inside folders
     if len(parts) >= 2:
-        # Check if the folder name is not generic
         folder_name = parts[-2]
         if folder_name.lower() not in ['source', 'images', 'sounds', 'project']:
             return folder_name  # Return the folder name as Student Name
@@ -128,14 +135,7 @@ with st.sidebar:
     
     st.markdown("**Analysis Sensitivity**")
     code_thresh = st.slider("Code Logic Match (%)", 70, 100, 85)
-    img_thresh = st.slider("Image Similarity (%)", 50, 100, 80, help="Lower = Stricter (Checks Color Match)")
-    
-    st.markdown("---")
-    
-    # --- AI KEY SECTION (Requested) ---
-    st.markdown("### 🔑 AI API Keys")
-    st.caption("Paste keys here if you want to use cloud AI for advanced text summary (Future Feature).")
-    openai_key = st.text_input("OpenAI / Gemini Key", type="password", help="Currently the tool runs locally (Offline AI) for privacy.")
+    img_thresh = st.slider("Image Similarity (%)", 50, 100, 80)
     
     st.markdown("---")
     st.info("Developed by **Midhun T V**\nMaster Trainer, KITE Kasaragod")
@@ -169,14 +169,11 @@ if uploaded_file:
                     # 1. PROJECTS
                     if ext in ['sb3', 'p3b']:
                         raw_data = io.BytesIO(z.read(filename))
-                        # Determine if Pictoblox
                         is_p3b = (ext == 'p3b')
                         
                         logic, assets, s_count = extract_project_code(raw_data, is_p3b)
                         if logic:
-                            # Handle duplicate student names
                             if owner in projects: owner += f"_{ext}"
-                            
                             projects[owner] = {
                                 'hash': get_file_hash(raw_data.getvalue()),
                                 'logic': logic,
@@ -188,7 +185,6 @@ if uploaded_file:
                     # 2. IMAGES
                     elif ext in ['jpg', 'jpeg', 'png']:
                         raw_data = io.BytesIO(z.read(filename))
-                        # Reset pointer for CV2 reading
                         raw_data.seek(0)
                         hist = get_image_histogram(raw_data)
                         
@@ -243,8 +239,83 @@ if uploaded_file:
                         <p>Similarity: <b>{sim:.1f}%</b> | Sprites: {d1['sprites']} vs {d2['sprites']}</p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                    # Log to Report
                     st.session_state.report_log.append(f"[PROJECT] {p1} vs {p2} | Logic Match: {sim:.1f}%")
 
-            if not found_proj: st
+            if not found_proj: st.success("✅ No project plagiarism detected.")
+
+    # === TAB 2: IMAGES (SMART CV) ===
+    with tab_img:
+        if len(images) < 2:
+            st.info("Not enough images found.")
+        else:
+            pairs = list(combinations(images.keys(), 2))
+            found_img = False
+            for p1, p2 in pairs:
+                d1, d2 = images[p1], images[p2]
+                
+                # OpenCV Histogram Comparison
+                similarity = cv2.compareHist(d1['hist'], d2['hist'], cv2.HISTCMP_CORREL) * 100
+                
+                if similarity > img_thresh:
+                    found_img = True
+                    st.markdown(f"""
+                    <div class="report-card">
+                        <h4>🎨 Visual Match: <span class="owner-tag">{p1}</span> vs <span class="owner-tag">{p2}</span></h4>
+                        <p>Visual Correlation: <b>{similarity:.1f}%</b></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    c1, c2 = st.columns(2)
+                    c1.image(d1['obj'], caption=p1)
+                    c2.image(d2['obj'], caption=p2)
+                    st.session_state.report_log.append(f"[IMAGE] {p1} vs {p2} | Visual Match: {similarity:.1f}%")
+            
+            if not found_img: st.success("✅ No suspicious posters found.")
+
+    # === TAB 3: VIDEOS ===
+    with tab_vid:
+        if len(videos) < 2:
+            st.info("Not enough videos found.")
+        else:
+            pairs = list(combinations(videos.keys(), 2))
+            found_vid = False
+            for p1, p2 in pairs:
+                d1, d2 = videos[p1], videos[p2]
+                
+                if d1['hash'] == d2['hash']:
+                    found_vid = True
+                    st.markdown(f"""
+                    <div class="report-card">
+                        <h4>🎥 Exact Video Copy: <span class="owner-tag">{p1}</span> vs <span class="owner-tag">{p2}</span></h4>
+                        <p>File Size: {d1['size'] / 1024 / 1024:.2f} MB (Identical)</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.session_state.report_log.append(f"[VIDEO] {p1} == {p2} | Exact Copy")
+            
+            if not found_vid: st.success("✅ No video duplicates found.")
+
+    # === TAB 4: REPORT ===
+    with tab_rep:
+        st.subheader("📝 Forensics Log")
+        
+        if st.session_state.report_log:
+            report_text = "\n".join(st.session_state.report_log)
+            st.text_area("Log View", report_text, height=300)
+            
+            st.download_button(
+                label="📥 Download Official Report",
+                data=f"LITTLE KITES FORENSICS REPORT\nGenerated by Midhun T V\n----------------------------\n{report_text}",
+                file_name="forensics_report.txt",
+                mime="text/plain"
+            )
+        else:
+            st.info("No suspicious activities logged yet.")
+
+else:
+    st.markdown("""
+    <div style='text-align: center; padding: 40px; background: white; border-radius: 10px;'>
+        <h3>👋 Welcome, Midhun Sir!</h3>
+        <p>Please upload the <b>Class Zip File</b> to begin.</p>
+        <p><i>Supports: Scratch, Pictoblox, Images, Videos</i></p>
+    </div>
+    """, unsafe_allow_html=True)
