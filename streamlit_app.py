@@ -10,155 +10,253 @@ import numpy as np
 from PIL import Image
 from itertools import combinations
 
-# --- PAGE CONFIG ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Little KITES Forensics",
+    page_title="Little KITES Forensics Master",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- SESSION STATE (Memory) ---
+# --- 2. SESSION STATE (Memory) ---
 if 'log_history' not in st.session_state:
     st.session_state.log_history = []
 
-# --- STYLING ---
+# --- 3. PROFESSIONAL STYLING (CSS) ---
 st.markdown("""
     <style>
-    .main {background-color: #f4f6f9;}
-    .report-card {background: white; padding: 15px; border-radius: 8px; border-left: 5px solid #e74c3c; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);}
-    .success-msg {padding: 15px; background: #d4edda; color: #155724; border-radius: 5px;}
+    /* Main Theme */
+    .main {background-color: #f4f7f6;}
+    h1 {color: #2c3e50; font-family: 'Helvetica', sans-serif;}
+    
+    /* Result Cards */
+    .report-card {
+        background: white; 
+        padding: 20px; 
+        border-radius: 12px; 
+        border-left: 6px solid #e74c3c; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 15px;
+    }
+    .success-card {
+        background: white;
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 6px solid #27ae60;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    /* Tags */
+    .student-tag {
+        background-color: #3498db;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 0.9em;
+    }
+    
+    /* Developer Footer */
+    .dev-footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background-color: #2c3e50;
+        color: white;
+        text-align: center;
+        padding: 10px;
+        font-size: 0.8em;
+        z-index: 999;
+    }
+    
+    /* Button Style */
+    .stButton>button {
+        background-color: #2980b9;
+        color: white;
+        border-radius: 8px;
+        font-weight: bold;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- CORE FUNCTIONS ---
+# --- 4. CORE INTELLIGENCE FUNCTIONS ---
 
 def get_file_hash(bytes_data):
+    """MD5 Hash for Exact Binary Copies"""
     return hashlib.md5(bytes_data).hexdigest()
 
 def get_image_histogram(image_bytes):
+    """OpenCV Smart Color Analysis for Posters"""
     try:
         file_bytes = np.asarray(bytearray(image_bytes.read()), dtype=np.uint8)
         image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        # Calculate Histogram (Color Distribution)
         hist = cv2.calcHist([image], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
         cv2.normalize(hist, hist)
         return hist.flatten()
-    except:
+    except Exception:
         return None
 
 def extract_project_code(bytes_data):
+    """Extract Logic from Scratch/Pictoblox"""
     logic_codes = []
     assets = set()
     sprite_count = 0
+    
     try:
         with zipfile.ZipFile(bytes_data) as z:
-            # Assets
+            # Asset Forensics
             for f in z.namelist():
                 if f != 'project.json':
                     assets.add(hashlib.md5(z.read(f)).hexdigest())
-            # Logic
+            
+            # Code Forensics
             if 'project.json' in z.namelist():
                 try:
                     project = json.loads(z.read('project.json'))
                     targets = project.get('targets', [])
-                    targets.sort(key=lambda x: x.get('name', ''))
+                    targets.sort(key=lambda x: x.get('name', '')) # Sort sprites to ignore order
                     sprite_count = len(targets)
+                    
                     for target in targets:
                         blocks = target.get('blocks', {})
                         if isinstance(blocks, dict):
                             for block in blocks.values():
                                 if isinstance(block, dict) and not block.get('shadow'):
                                     logic_codes.append(block.get('opcode', 'unknown'))
-                except:
-                    return "ERROR", assets, 0
-    except:
+                except json.JSONDecodeError:
+                    return "ERROR_JSON", assets, 0
+    except Exception:
         return None, None, 0
+
     return "\n".join(logic_codes), assets, sprite_count
 
-def get_name_from_path(filename):
-    # Tries to find student name from folder structure inside Zip
-    parts = filename.replace("\\", "/").split("/")
-    if len(parts) > 1 and parts[-2].lower() not in ['images', 'sounds']:
-        return parts[-2]
-    return os.path.splitext(parts[-1])[0]
+def extract_owner_name(filepath):
+    """
+    MASTER NAME EXTRACTOR
+    Handles:
+    1. School/Class9/Abhishek/Game.sb3  -> 'Abhishek'
+    2. School/Abhishek.sb3              -> 'Abhishek'
+    """
+    # Standardize path separators
+    path = filepath.replace("\\", "/")
+    parts = path.split("/")
+    
+    # Filter out junk (Mac system files)
+    parts = [p for p in parts if "__MACOSX" not in p and p != "."]
+    filename = parts[-1]
+    
+    # Logic: Look for the parent folder
+    if len(parts) >= 2:
+        folder_name = parts[-2]
+        # Ignore generic folder names
+        if folder_name.lower() not in ['images', 'sounds', 'project', 'src', 'assets']:
+            return folder_name
+            
+    # Fallback: Use filename
+    return os.path.splitext(filename)[0].replace("_", " ").title()
 
-# --- SIDEBAR ---
+# --- 5. SIDEBAR PROFILE ---
 with st.sidebar:
-    st.title("🛡️ Forensics Controls")
-    code_thresh = st.slider("Code Match Threshold", 70, 100, 85)
-    img_thresh = st.slider("Image Match Threshold", 50, 100, 80)
-    st.info("Version 7.0 (Stable)\nSupports: .sb3, .p3b, .zip, Images")
-    if st.button("🗑️ Clear Report History"):
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/121px-Python-logo-notext.svg.png", width=60)
+    st.markdown("## 🛡️ Forensics Master")
+    st.caption("Version 8.0 (Secure Edition)")
+    st.markdown("---")
+    
+    st.markdown("### 👨‍💻 Developed By")
+    st.info("**Midhun T V**\n\nMaster Trainer\nKITE Kasaragod")
+    
+    st.markdown("---")
+    st.markdown("### ⚙️ Sensitivity")
+    code_thresh = st.slider("Code Logic Match", 70, 100, 85, format="%d%%")
+    img_thresh = st.slider("Visual Match", 50, 100, 80, format="%d%%")
+    
+    if st.button("🗑️ Reset All Data"):
         st.session_state.log_history = []
         st.experimental_rerun()
 
-# --- MAIN APP ---
-st.title("Little KITES Forensics Suite")
-st.markdown("### Master Trainer Edition")
+# --- 6. MAIN INTERFACE ---
+st.title("🛡️ Little KITES Forensics Suite")
+st.markdown("#### Advanced Analysis for Scratch, Pictoblox, Posters & Videos")
 
-# UPLOADER (Fixed to allow multiple types again)
+# Upload Area
 uploaded_files = st.file_uploader(
-    "Upload Files (Drag .sb3 files directly OR a Class Zip)", 
-    type=["zip", "sb3", "p3b", "png", "jpg", "jpeg"], 
+    "📂 Drop Class Zip (Recommended) or Individual Files", 
+    type=["zip", "sb3", "p3b", "png", "jpg", "jpeg", "mp4", "mkv"], 
     accept_multiple_files=True
 )
 
 if uploaded_files:
-    # 1. PRE-PROCESSING
-    projects = {}
-    images = {}
-    
-    # We use a loop to handle both Zips and individual files
-    for up_file in uploaded_files:
-        
-        # --- IF ZIP ---
-        if up_file.name.endswith(".zip"):
-            try:
-                with zipfile.ZipFile(up_file) as z:
-                    for filename in z.namelist():
-                        if filename.startswith("__") or filename.startswith(".") or filename.endswith("/"): continue
-                        
-                        raw = io.BytesIO(z.read(filename))
-                        owner = get_name_from_path(filename)
-                        ext = filename.split('.')[-1].lower()
-                        
-                        if ext in ['sb3', 'p3b']:
-                            l, a, s = extract_project_code(raw)
-                            if l: 
-                                if owner in projects: owner += f"_{len(projects)}"
-                                projects[owner] = {'hash': get_file_hash(raw.getvalue()), 'logic': l, 'sprites': s}
-                        
-                        elif ext in ['jpg', 'png', 'jpeg']:
-                            raw.seek(0)
-                            hist = get_image_histogram(raw)
-                            if hist is not None:
+    projects = {} 
+    images = {}   
+    videos = {}   
+
+    with st.spinner("🚀 Unpacking and Analyzing..."):
+        # We loop through everything (Zips and Single Files)
+        for up_file in uploaded_files:
+            
+            # --- ZIP HANDLING ---
+            if up_file.name.endswith(".zip"):
+                try:
+                    with zipfile.ZipFile(up_file) as z:
+                        for filename in z.namelist():
+                            if filename.startswith("__") or filename.startswith(".") or filename.endswith("/"): continue
+                            
+                            # Extract Name using Smart Logic
+                            owner = extract_owner_name(filename)
+                            ext = filename.split('.')[-1].lower()
+                            
+                            # 1. Projects
+                            if ext in ['sb3', 'p3b']:
+                                raw = io.BytesIO(z.read(filename))
+                                l, a, s = extract_project_code(raw)
+                                if l: 
+                                    if owner in projects: owner += f"_{len(projects)}"
+                                    projects[owner] = {'hash': get_file_hash(raw.getvalue()), 'logic': l, 'sprites': s}
+                            
+                            # 2. Images (OpenCV)
+                            elif ext in ['jpg', 'jpeg', 'png']:
+                                raw = io.BytesIO(z.read(filename))
                                 raw.seek(0)
-                                if owner in images: owner += f"_{len(images)}"
-                                images[owner] = {'hist': hist, 'obj': raw}
-            except:
-                st.error(f"Error reading zip: {up_file.name}")
+                                hist = get_image_histogram(raw)
+                                if hist is not None:
+                                    raw.seek(0)
+                                    if owner in images: owner += f"_{len(images)}"
+                                    images[owner] = {'hist': hist, 'obj': raw}
+                                    
+                            # 3. Videos (Hash Only)
+                            elif ext in ['mp4', 'mkv', 'avi']:
+                                raw_bytes = z.read(filename)
+                                if owner in videos: owner += f"_{len(videos)}"
+                                videos[owner] = {'hash': get_file_hash(raw_bytes), 'size': len(raw_bytes)}
 
-        # --- IF INDIVIDUAL FILE ---
-        else:
-            up_file.seek(0)
-            owner = os.path.splitext(up_file.name)[0]
-            ext = up_file.name.split('.')[-1].lower()
-            
-            if ext in ['sb3', 'p3b']:
-                l, a, s = extract_project_code(up_file)
-                if l: projects[owner] = {'hash': get_file_hash(up_file.getvalue()), 'logic': l, 'sprites': s}
-            
-            elif ext in ['jpg', 'png', 'jpeg']:
-                hist = get_image_histogram(up_file)
-                if hist is not None:
-                    up_file.seek(0)
-                    images[owner] = {'hist': hist, 'obj': up_file}
+                except Exception as e:
+                    st.toast(f"Error reading zip: {up_file.name}")
 
-    # 2. ANALYSIS TABS
-    tab1, tab2, tab3 = st.tabs(["🧩 Projects", "🖼️ Posters", "📄 Report"])
+            # --- SINGLE FILE HANDLING ---
+            else:
+                up_file.seek(0)
+                owner = os.path.splitext(up_file.name)[0]
+                ext = up_file.name.split('.')[-1].lower()
+                
+                if ext in ['sb3', 'p3b']:
+                    l, a, s = extract_project_code(up_file)
+                    if l: projects[owner] = {'hash': get_file_hash(up_file.getvalue()), 'logic': l, 'sprites': s}
+                
+                elif ext in ['jpg', 'png', 'jpeg']:
+                    hist = get_image_histogram(up_file)
+                    if hist is not None:
+                        up_file.seek(0)
+                        images[owner] = {'hist': hist, 'obj': up_file}
 
+    # --- 7. RESULTS TABS ---
+    tab1, tab2, tab3, tab4 = st.tabs(["🧩 Projects", "🖼️ Posters", "🎥 Videos", "📄 Report"])
+
+    # TAB 1: PROJECTS
     with tab1:
         if len(projects) < 2:
-            st.warning("Need at least 2 project files to compare.")
+            st.info("Upload at least 2 project files to compare.")
         else:
             pairs = list(combinations(projects.keys(), 2))
             found = False
@@ -167,53 +265,94 @@ if uploaded_files:
                 
                 # Binary Check
                 if d1['hash'] == d2['hash']:
-                    st.error(f"🚨 EXACT COPY: {p1} == {p2}")
-                    st.session_state.log_history.append(f"[BINARY] {p1} == {p2}")
+                    st.markdown(f"""
+                    <div class="report-card">
+                        <h4>🚨 EXACT COPY DETECTED</h4>
+                        <span class="student-tag">{p1}</span> is identical to <span class="student-tag">{p2}</span>
+                    </div>""", unsafe_allow_html=True)
+                    st.session_state.log_history.append(f"[PROJECT BINARY] {p1} == {p2}")
                     found = True
                     continue
-                
+
                 # Logic Check
                 sim = difflib.SequenceMatcher(None, d1['logic'], d2['logic']).ratio() * 100
                 if sim > code_thresh:
                     found = True
                     st.markdown(f"""
                     <div class="report-card">
-                        <h4>⚠️ Logic Match: {p1} vs {p2}</h4>
-                        <p>Similarity: <b>{sim:.1f}%</b> | Sprites: {d1['sprites']} vs {d2['sprites']}</p>
+                        <h4>⚠️ Logic Similarity: {sim:.1f}%</h4>
+                        <span class="student-tag">{p1}</span> vs <span class="student-tag">{p2}</span>
+                        <p>Sprites: {d1['sprites']} / {d2['sprites']}</p>
                     </div>""", unsafe_allow_html=True)
-                    st.session_state.log_history.append(f"[LOGIC] {p1} vs {p2} ({sim:.1f}%)")
+                    st.session_state.log_history.append(f"[PROJECT LOGIC] {p1} vs {p2} ({sim:.1f}%)")
             
-            if not found: st.markdown('<div class="success-msg">✅ No Project Plagiarism Detected</div>', unsafe_allow_html=True)
+            if not found: st.markdown('<div class="success-card">✅ No Project Plagiarism</div>', unsafe_allow_html=True)
 
+    # TAB 2: POSTERS
     with tab2:
         if len(images) < 2:
-            st.warning("Need at least 2 images to compare.")
+            st.info("Upload at least 2 images.")
         else:
             pairs = list(combinations(images.keys(), 2))
             found = False
             for p1, p2 in pairs:
                 d1, d2 = images[p1], images[p2]
                 
-                # Visual Check (Histogram)
+                # OpenCV Compare
                 sim = cv2.compareHist(d1['hist'], d2['hist'], cv2.HISTCMP_CORREL) * 100
                 if sim > img_thresh:
                     found = True
                     st.markdown(f"""
                     <div class="report-card">
-                        <h4>🎨 Visual Match: {p1} vs {p2}</h4>
-                        <p>Correlation: <b>{sim:.1f}%</b></p>
+                        <h4>🎨 Visual Match: {sim:.1f}%</h4>
+                        <span class="student-tag">{p1}</span> vs <span class="student-tag">{p2}</span>
                     </div>""", unsafe_allow_html=True)
                     c1, c2 = st.columns(2)
-                    c1.image(d1['obj'], caption=p1)
-                    c2.image(d2['obj'], caption=p2)
-                    st.session_state.log_history.append(f"[IMAGE] {p1} vs {p2} ({sim:.1f}%)")
-            
-            if not found: st.markdown('<div class="success-msg">✅ No Poster Plagiarism Detected</div>', unsafe_allow_html=True)
+                    c1.image(d1['obj'], caption=p1, width=200)
+                    c2.image(d2['obj'], caption=p2, width=200)
+                    st.session_state.log_history.append(f"[IMAGE VISUAL] {p1} vs {p2} ({sim:.1f}%)")
 
+            if not found: st.markdown('<div class="success-card">✅ No Poster Plagiarism</div>', unsafe_allow_html=True)
+
+    # TAB 3: VIDEOS
     with tab3:
-        if st.session_state.log_history:
-            report_txt = "\n".join(set(st.session_state.log_history)) # Remove dupes
-            st.text_area("Evidence Log", report_txt, height=300)
-            st.download_button("📥 Download Report", report_txt, "report.txt")
+        if len(videos) < 2:
+            st.info("Upload at least 2 videos.")
         else:
-            st.info("No issues found yet.")
+            pairs = list(combinations(videos.keys(), 2))
+            found = False
+            for p1, p2 in pairs:
+                d1, d2 = videos[p1], videos[p2]
+                if d1['hash'] == d2['hash']:
+                    found = True
+                    st.markdown(f"""
+                    <div class="report-card">
+                        <h4>🎥 Duplicate Video File</h4>
+                        <span class="student-tag">{p1}</span> == <span class="student-tag">{p2}</span>
+                        <p>Size: {d1['size']/1024/1024:.2f} MB</p>
+                    </div>""", unsafe_allow_html=True)
+                    st.session_state.log_history.append(f"[VIDEO DUPLICATE] {p1} == {p2}")
+            if not found: st.markdown('<div class="success-card">✅ No Video Plagiarism</div>', unsafe_allow_html=True)
+
+    # TAB 4: REPORT
+    with tab4:
+        st.subheader("📝 Official Forensics Log")
+        if st.session_state.log_history:
+            # Deduplicate log entries
+            unique_logs = sorted(list(set(st.session_state.log_history)))
+            report_text = f"LITTLE KITES PLAGIARISM REPORT\nEvaluator: Midhun T V\nDate: {str(os.path.abspath('.'))}\n----------------------------------\n" + "\n".join(unique_logs)
+            
+            st.text_area("Log View", report_text, height=300)
+            st.download_button("📥 Download Report.txt", report_text, "forensics_report.txt")
+        else:
+            st.info("No suspicious activity detected in this batch.")
+
+else:
+    # Empty State Welcome
+    st.markdown("""
+    <div style='text-align: center; padding: 50px; background: white; border-radius: 12px; margin-top: 20px;'>
+        <h3>👋 Welcome, Midhun Sir!</h3>
+        <p>This tool is optimized for <b>Little KITES</b> evaluation.</p>
+        <p>Please upload a <b>Class Zip File</b> to begin analysis.</p>
+    </div>
+    """, unsafe_allow_html=True)
