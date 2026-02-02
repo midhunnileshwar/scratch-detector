@@ -7,259 +7,297 @@ import io
 import os
 import cv2
 import numpy as np
+from collections import Counter
 from PIL import Image
 from itertools import combinations
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="KITE Forensics Master", page_icon="🛡️", layout="wide")
+# -------------------------------------------------
+# 1. CONFIGURATION
+# -------------------------------------------------
+st.set_page_config(
+    page_title="KITE Forensics Master",
+    page_icon="🛡️",
+    layout="wide"
+)
 
-# --- 2. CSS STYLING ---
+# -------------------------------------------------
+# 2. CSS STYLING
+# -------------------------------------------------
 st.markdown("""
-    <style>
-    .main {background-color: #f4f7f6;}
-    .report-card {
-        background: white; padding: 20px; border-radius: 10px;
-        border-left: 6px solid #e74c3c; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 10px;
-    }
-    .student-tag {
-        background-color: #2980b9; color: white; padding: 5px 10px;
-        border-radius: 15px; font-weight: bold; font-size: 0.9em;
-    }
-    .stat-box {
-        background: white; padding: 15px; border-radius: 8px;
-        text-align: center; border-bottom: 4px solid #2980b9;
-    }
-    </style>
+<style>
+.main {background-color: #f4f7f6;}
+.report-card {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    border-left: 6px solid #e74c3c;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    margin-bottom: 12px;
+}
+.student-tag {
+    background-color: #2980b9;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-weight: bold;
+    font-size: 0.9em;
+}
+.stat-box {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+    border-bottom: 4px solid #2980b9;
+}
+</style>
 """, unsafe_allow_html=True)
 
-# --- 3. CORE LOGIC EXTRACTOR (THE FIX) ---
-def get_file_hash(bytes_data):
-    return hashlib.md5(bytes_data).hexdigest()
+# -------------------------------------------------
+# 3. CORE UTILITIES
+# -------------------------------------------------
+def get_file_hash(bytes_data: bytes) -> str:
+    """SHA-256 hash for reliable duplicate detection"""
+    return hashlib.sha256(bytes_data).hexdigest()
 
-def get_image_histogram(image_bytes):
+def get_image_histogram(file_obj):
+    """Normalized HSV histogram for poster similarity"""
     try:
-        file_bytes = np.asarray(bytearray(image_bytes.read()), dtype=np.uint8)
-        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        hist = cv2.calcHist([image], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+        file_bytes = np.asarray(bytearray(file_obj.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        img = cv2.resize(img, (256, 256))
+
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1, 2], None,
+                            [8, 8, 8], [0, 180, 0, 256, 0, 256])
         cv2.normalize(hist, hist)
         return hist.flatten()
-    except:
+    except Exception:
         return None
 
+# -------------------------------------------------
+# 4. SCRATCH / PICTOBLOX EXTRACTION
+# -------------------------------------------------
 def extract_project_logic(file_bytes):
     """
-    Reads .sb3 and .p3b files properly.
-    Returns: (Logic String, Asset Hashes, Sprite Count)
+    Reads .sb3 and .p3b files
+    Returns:
+        opcode_counter (Counter)
+        asset_hashes (set)
+        sprite_count (int)
     """
-    logic = []
-    assets = set()
+    opcode_list = []
+    asset_hashes = set()
     sprite_count = 0
-    
+
     try:
         with zipfile.ZipFile(file_bytes) as z:
-            # 1. Get Assets
             for f in z.namelist():
-                if f != 'project.json':
-                    assets.add(hashlib.md5(z.read(f)).hexdigest())
-            
-            # 2. Get Logic (project.json)
-            if 'project.json' in z.namelist():
-                data = json.loads(z.read('project.json'))
-                targets = data.get('targets', [])
-                targets.sort(key=lambda x: x.get('name', '')) # Sort sprites
-                sprite_count = len(targets)
-                
-                for target in targets:
-                    blocks = target.get('blocks', {})
-                    # Handle both Dict and List formats (Pictoblox sometimes uses Lists)
-                    if isinstance(blocks, dict):
-                        for block in blocks.values():
-                            if isinstance(block, dict) and not block.get('shadow'):
-                                logic.append(block.get('opcode', 'unknown'))
-                    elif isinstance(blocks, list): # Rare case
-                        for block in blocks:
-                            if isinstance(block, dict) and not block.get('shadow'):
-                                logic.append(block.get('opcode', 'unknown'))
-                                
-    except Exception as e:
-        return None, None, 0 # File is corrupt or not a zip
-        
-    return "\n".join(logic), assets, sprite_count
+                if f != "project.json" and not f.endswith("/"):
+                    asset_hashes.add(get_file_hash(z.read(f)))
 
-def extract_student_name(filename):
-    """
-    Folder-Aware Naming.
-    Zip Path: "Class 9A/Midhun/Game.sb3" -> Returns "Midhun"
-    """
-    path = filename.replace("\\", "/")
-    parts = [p for p in path.split("/") if "__MACOSX" not in p and p != "." and p]
-    
+            if "project.json" not in z.namelist():
+                return None, None, 0
+
+            data = json.loads(z.read("project.json"))
+            targets = data.get("targets", [])
+            targets.sort(key=lambda x: x.get("name", ""))
+            sprite_count = len(targets)
+
+            for target in targets:
+                blocks = target.get("blocks", {})
+                if isinstance(blocks, dict):
+                    for block in blocks.values():
+                        if isinstance(block, dict) and not block.get("shadow"):
+                            opcode_list.append(block.get("opcode", "unknown"))
+                elif isinstance(blocks, list):
+                    for block in blocks:
+                        if isinstance(block, dict) and not block.get("shadow"):
+                            opcode_list.append(block.get("opcode", "unknown"))
+
+    except Exception:
+        return None, None, 0
+
+    return Counter(opcode_list), asset_hashes, sprite_count
+
+def extract_student_name(path):
+    path = path.replace("\\", "/")
+    parts = [p for p in path.split("/") if p and "__MACOSX" not in p]
+
     if len(parts) > 1:
-        # Check parent folder
         folder = parts[-2]
-        if folder.lower() not in ['images', 'sounds', 'project', 'src']:
+        if folder.lower() not in ["images", "sounds", "src", "project"]:
             return folder
-            
-    # Fallback to filename
+
     return os.path.splitext(parts[-1])[0].replace("_", " ").title()
 
-# --- 4. SIDEBAR ---
+# -------------------------------------------------
+# 5. SIDEBAR
+# -------------------------------------------------
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/121px-Python-logo-notext.svg.png", width=60)
+    st.image(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/121px-Python-logo-notext.svg.png",
+        width=60
+    )
     st.markdown("## 🛡️ Forensics Master")
-    st.caption("v10.0 (Logic Restored)")
+    st.caption("v11.0 – Structural Logic Engine")
     st.markdown("---")
-    st.info("**Developed by Midhun T V**\nMaster Trainer\nKITE Kasaragod")
+    st.info("**Developed by Midhun T V**  \nMaster Trainer  \nKITE Kasaragod")
     st.markdown("---")
-    code_thresh = st.slider("Code Logic Match", 70, 100, 85, format="%d%%")
-    img_thresh = st.slider("Visual Match", 50, 100, 80, format="%d%%")
 
-# --- 5. MAIN INTERFACE ---
-st.title("🛡️ Little KITES Forensics Suite")
-st.markdown("#### Scratch (.sb3) & Pictoblox (.p3b) Analysis Tool")
+    code_thresh = st.slider("Code Similarity Threshold", 60, 100, 85)
+    img_thresh = st.slider("Poster Similarity Threshold", 50, 100, 80)
+
+# -------------------------------------------------
+# 6. MAIN INTERFACE
+# -------------------------------------------------
+st.title("🛡️ Little KITES Forensics Suite V2.0")
+st.markdown("#### Scratch (.sb3) & PictoBlox (.p3b) Plagiarism Analysis")
 
 uploaded_files = st.file_uploader(
-    "📂 Upload Class Zip (Recommended) or Files", 
-    type=["zip", "sb3", "p3b", "png", "jpg", "jpeg", "mp4", "mkv"], 
+    "📂 Upload ZIP or Individual Files",
+    type=["zip", "sb3", "p3b", "png", "jpg", "jpeg", "mp4", "mkv"],
     accept_multiple_files=True
 )
 
+projects, images, videos = {}, {}, {}
+
+# -------------------------------------------------
+# 7. FILE PROCESSING
+# -------------------------------------------------
 if uploaded_files:
-    projects = {}
-    images = {}
-    videos = {}
-    
-    with st.spinner("Processing Files..."):
-        for up_file in uploaded_files:
-            
-            # --- ZIP HANDLING ---
-            if up_file.name.endswith(".zip"):
+    with st.spinner("Processing submissions..."):
+        for up in uploaded_files:
+            if up.name.endswith(".zip"):
                 try:
-                    with zipfile.ZipFile(up_file) as z:
-                        for filename in z.namelist():
-                            if filename.startswith(".") or filename.endswith("/"): continue
-                            if "__MACOSX" in filename: continue
-                            
-                            owner = extract_student_name(filename)
-                            ext = filename.split('.')[-1].lower()
-                            
-                            # LOGIC: Projects
-                            if ext in ['sb3', 'p3b']:
-                                raw = io.BytesIO(z.read(filename))
-                                l, a, s = extract_project_logic(raw)
-                                if l: 
-                                    if owner in projects: owner += f" ({len(projects)+1})"
-                                    projects[owner] = {'hash': get_file_hash(raw.getvalue()), 'logic': l, 'sprites': s}
-                            
-                            # LOGIC: Images
-                            elif ext in ['jpg', 'png', 'jpeg']:
-                                raw = io.BytesIO(z.read(filename))
-                                raw.seek(0)
+                    with zipfile.ZipFile(up) as z:
+                        for fname in z.namelist():
+                            if fname.endswith("/") or "__MACOSX" in fname:
+                                continue
+
+                            owner = extract_student_name(fname)
+                            ext = fname.split(".")[-1].lower()
+                            data = z.read(fname)
+
+                            if ext in ["sb3", "p3b"]:
+                                raw = io.BytesIO(data)
+                                logic, assets, sprites = extract_project_logic(raw)
+                                if logic:
+                                    projects[owner] = {
+                                        "hash": get_file_hash(data),
+                                        "logic": logic,
+                                        "assets": assets,
+                                        "sprites": sprites
+                                    }
+
+                            elif ext in ["png", "jpg", "jpeg"]:
+                                raw = io.BytesIO(data)
                                 hist = get_image_histogram(raw)
                                 if hist is not None:
-                                    raw.seek(0)
-                                    if owner in images: owner += f" ({len(images)+1})"
-                                    images[owner] = {'hist': hist, 'obj': raw}
-                            
-                            # LOGIC: Videos
-                            elif ext in ['mp4', 'mkv']:
-                                raw_bytes = z.read(filename)
-                                if owner in videos: owner += f" ({len(videos)+1})"
-                                videos[owner] = {'hash': get_file_hash(raw_bytes), 'size': len(raw_bytes)}
+                                    images[owner] = {"hist": hist, "obj": raw}
 
-                except:
-                    st.error(f"Error reading zip: {up_file.name}")
+                            elif ext in ["mp4", "mkv"]:
+                                videos[owner] = {
+                                    "hash": get_file_hash(data),
+                                    "size": len(data)
+                                }
+                except Exception:
+                    st.error(f"Error reading {up.name}")
 
-            # --- SINGLE FILE HANDLING ---
-            else:
-                up_file.seek(0)
-                owner = os.path.splitext(up_file.name)[0].replace("_", " ").title()
-                ext = up_file.name.split('.')[-1].lower()
-                
-                if ext in ['sb3', 'p3b']:
-                    l, a, s = extract_project_logic(up_file)
-                    if l: projects[owner] = {'hash': get_file_hash(up_file.getvalue()), 'logic': l, 'sprites': s}
-                elif ext in ['jpg', 'png']:
-                    hist = get_image_histogram(up_file)
-                    if hist is not None:
-                        up_file.seek(0)
-                        images[owner] = {'hist': hist, 'obj': up_file}
+# -------------------------------------------------
+# 8. DASHBOARD
+# -------------------------------------------------
+c1, c2, c3 = st.columns(3)
+c1.markdown(f"<div class='stat-box'><h4>🧩 Projects</h4><h2>{len(projects)}</h2></div>", unsafe_allow_html=True)
+c2.markdown(f"<div class='stat-box'><h4>🖼️ Posters</h4><h2>{len(images)}</h2></div>", unsafe_allow_html=True)
+c3.markdown(f"<div class='stat-box'><h4>🎥 Videos</h4><h2>{len(videos)}</h2></div>", unsafe_allow_html=True)
 
-    # --- RESULTS DASHBOARD ---
-    c1, c2, c3 = st.columns(3)
-    c1.markdown(f"<div class='stat-box'><h4>🧩 Projects Found</h4><h2>{len(projects)}</h2></div>", unsafe_allow_html=True)
-    c2.markdown(f"<div class='stat-box'><h4>🖼️ Posters Found</h4><h2>{len(images)}</h2></div>", unsafe_allow_html=True)
-    c3.markdown(f"<div class='stat-box'><h4>🎥 Videos Found</h4><h2>{len(videos)}</h2></div>", unsafe_allow_html=True)
+tab1, tab2, tab3 = st.tabs(["🧩 Code Analysis", "🖼️ Poster Analysis", "🎥 Video Analysis"])
 
-    tab1, tab2, tab3 = st.tabs(["🧩 Projects Analysis", "🖼️ Poster Analysis", "🎥 Video Analysis"])
+# -------------------------------------------------
+# 9. PROJECT ANALYSIS
+# -------------------------------------------------
+with tab1:
+    if len(projects) < 2:
+        st.info("Upload at least two Scratch/PictoBlox files.")
+    else:
+        found = False
+        for p1, p2 in combinations(projects.keys(), 2):
+            d1, d2 = projects[p1], projects[p2]
 
-    # --- TAB 1: PROJECTS ---
-    with tab1:
-        if len(projects) < 2:
-            st.warning("Needs at least 2 .sb3/.p3b files to compare.")
-        else:
-            pairs = list(combinations(projects.keys(), 2))
-            found = False
-            for p1, p2 in pairs:
-                d1, d2 = projects[p1], projects[p2]
-                
-                # Binary Match
-                if d1['hash'] == d2['hash']:
-                    st.markdown(f"""
-                    <div class="report-card">
-                        <h4>🚨 EXACT COPY DETECTED</h4>
-                        <span class="student-tag">{p1}</span> is identical to <span class="student-tag">{p2}</span>
-                    </div>""", unsafe_allow_html=True)
-                    found = True
-                    continue
+            if d1["hash"] == d2["hash"]:
+                found = True
+                st.markdown(f"""
+                <div class="report-card">
+                    <h4>🚨 Exact Project Copy</h4>
+                    <span class="student-tag">{p1}</span> == <span class="student-tag">{p2}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                continue
 
-                # Logic Match
-                sim = difflib.SequenceMatcher(None, d1['logic'], d2['logic']).ratio() * 100
-                if sim > code_thresh:
-                    found = True
-                    st.markdown(f"""
-                    <div class="report-card">
-                        <h4>⚠️ High Code Similarity: {sim:.1f}%</h4>
-                        <span class="student-tag">{p1}</span> vs <span class="student-tag">{p2}</span>
-                        <br><br><b>Sprite Count:</b> {d1['sprites']} vs {d2['sprites']}
-                    </div>""", unsafe_allow_html=True)
-            
-            if not found: st.success("✅ No code plagiarism detected.")
+            common_assets = len(d1["assets"] & d2["assets"])
+            total_assets = max(len(d1["assets"]), 1)
 
-    # --- TAB 2: POSTERS ---
-    with tab2:
-        if len(images) < 2: st.info("Needs 2+ images.")
-        else:
-            pairs = list(combinations(images.keys(), 2))
-            found = False
-            for p1, p2 in pairs:
-                d1, d2 = images[p1], images[p2]
-                sim = cv2.compareHist(d1['hist'], d2['hist'], cv2.HISTCMP_CORREL) * 100
-                if sim > img_thresh:
-                    found = True
-                    st.markdown(f"""
-                    <div class="report-card">
-                        <h4>🎨 Visual Match: {sim:.1f}%</h4>
-                        <span class="student-tag">{p1}</span> vs <span class="student-tag">{p2}</span>
-                    </div>""", unsafe_allow_html=True)
-                    col1, col2 = st.columns(2)
-                    col1.image(d1['obj'], caption=p1, width=200)
-                    col2.image(d2['obj'], caption=p2, width=200)
-            if not found: st.success("✅ No poster plagiarism detected.")
+            opcode_similarity = (
+                sum((d1["logic"] & d2["logic"]).values()) /
+                max(sum(d1["logic"].values()), sum(d2["logic"].values()))
+            ) * 100
 
-    # --- TAB 3: VIDEOS ---
-    with tab3:
-        if len(videos) < 2: st.info("Needs 2+ videos.")
-        else:
-            pairs = list(combinations(videos.keys(), 2))
-            found = False
-            for p1, p2 in pairs:
-                d1, d2 = videos[p1], videos[p2]
-                if d1['hash'] == d2['hash']:
-                    found = True
-                    st.markdown(f"""
-                    <div class="report-card">
-                        <h4>🎥 Duplicate Video File</h4>
-                        <span class="student-tag">{p1}</span> == <span class="student-tag">{p2}</span>
-                    </div>""", unsafe_allow_html=True)
-            if not found: st.success("✅ No video duplicates found.")
+            if opcode_similarity >= code_thresh:
+                found = True
+                st.markdown(f"""
+                <div class="report-card">
+                    <h4>⚠️ Structural Code Similarity: {opcode_similarity:.1f}%</h4>
+                    <span class="student-tag">{p1}</span> vs <span class="student-tag">{p2}</span><br><br>
+                    <b>Sprites:</b> {d1['sprites']} vs {d2['sprites']}<br>
+                    <b>Shared Assets:</b> {common_assets}
+                </div>
+                """, unsafe_allow_html=True)
+
+        if not found:
+            st.success("✅ No significant code similarity detected.")
+
+# -------------------------------------------------
+# 10. POSTER ANALYSIS
+# -------------------------------------------------
+with tab2:
+    if len(images) < 2:
+        st.info("Upload at least two images.")
+    else:
+        found = False
+        for p1, p2 in combinations(images.keys(), 2):
+            sim = cv2.compareHist(images[p1]["hist"], images[p2]["hist"], cv2.HISTCMP_CORREL) * 100
+            if sim >= img_thresh:
+                found = True
+                st.markdown(f"""
+                <div class="report-card">
+                    <h4>🎨 Visual Similarity: {sim:.1f}%</h4>
+                    <span class="student-tag">{p1}</span> vs <span class="student-tag">{p2}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                col1.image(images[p1]["obj"], caption=p1, width=220)
+                col2.image(images[p2]["obj"], caption=p2, width=220)
+
+        if not found:
+            st.success("✅ No poster plagiarism detected.")
+
+# -------------------------------------------------
+# 11. VIDEO ANALYSIS
+# -------------------------------------------------
+with tab3:
+    if len(videos) < 2:
+        st.info("Upload at least two videos.")
+    else:
+        found = False
+        for p1, p2 in combinations(videos.keys(), 2):
+            if videos[p1]["hash"] == videos[p2]["hash"]:
+                found = True
+                st.markdown(f"""
+                <div class="report-card">
+                    <h4>🎥 Duplicate Video Detected</h4>
+                    <span class="student-tag">{p1}</span> == <span class="student-tag">{p2}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+        if not found:
+            st.success("✅ No duplicate videos detected.")
