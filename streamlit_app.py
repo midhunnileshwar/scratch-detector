@@ -12,15 +12,19 @@ from itertools import combinations
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
-st.set_page_config("KITE Forensics Master 3.0", "🛡️", layout="wide")
+st.set_page_config(
+    page_title="KITE Forensics Master",
+    page_icon="🛡️",
+    layout="wide"
+)
 
 # -------------------------------------------------
-# UTILS
+# UTILITIES
 # -------------------------------------------------
-def sha256(data):
+def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
-def extract_student_name(path):
+def extract_student_name(path: str) -> str:
     path = path.replace("\\", "/")
     parts = [p for p in path.split("/") if p and "__MACOSX" not in p]
 
@@ -37,7 +41,7 @@ def extract_student_name(path):
     return os.path.splitext(parts[-1])[0].replace("_", " ").title()
 
 # -------------------------------------------------
-# PROJECT EXTRACTOR (CONFIRMED SAFE)
+# SCRATCH / PICTOBLOX EXTRACTOR (FINAL)
 # -------------------------------------------------
 def extract_project_logic(file_obj):
     opcodes = []
@@ -55,7 +59,10 @@ def extract_project_logic(file_obj):
                 if name != "project.json" and not name.endswith("/"):
                     assets.add(sha256(z.read(name)))
 
-            data = json.loads(z.read("project.json"))
+            data = json.loads(
+                z.read("project.json").decode("utf-8", errors="ignore")
+            )
+
             targets = data.get("targets", [])
             sprite_count = len(targets)
 
@@ -81,13 +88,19 @@ def extract_project_logic(file_obj):
         "sprites": sprite_count
     }
 
+# -------------------------------------------------
+# IMAGE HISTOGRAM
+# -------------------------------------------------
 def image_hist(file_obj):
     try:
         arr = np.asarray(bytearray(file_obj.read()), dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        img = cv2.resize(img, (256,256))
+        img = cv2.resize(img, (256, 256))
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        hist = cv2.calcHist([hsv],[0,1,2],None,[8,8,8],[0,180,0,256,0,256])
+        hist = cv2.calcHist(
+            [hsv], [0, 1, 2], None,
+            [8, 8, 8], [0, 180, 0, 256, 0, 256]
+        )
         cv2.normalize(hist, hist)
         return hist.flatten()
     except Exception:
@@ -96,31 +109,39 @@ def image_hist(file_obj):
 # -------------------------------------------------
 # DATA CONTAINERS
 # -------------------------------------------------
-projects = []
-videos = []
-images = {}
+projects = []     # Scratch / PictoBlox
+images = {}       # Posters
+videos = []       # MP4 / MKV
+documents = []    # PDF / ODT / XML
 
 # -------------------------------------------------
 # UI
 # -------------------------------------------------
-st.title("🛡️ Little KITES Forensics Suite 2.0")
+st.title("🛡️ Little KITES Forensics Suite")
 
 uploads = st.file_uploader(
-    "Upload ZIP or Files",
-    type=["zip","sb3","p3b","png","jpg","jpeg","mp4","mkv"],
+    "📂 Upload ZIP or Individual Files",
+    type=[
+        "zip",
+        "sb3", "p3b",
+        "png", "jpg", "jpeg",
+        "mp4", "mkv",
+        "pdf", "odt", "xml"
+    ],
     accept_multiple_files=True
 )
 
 # -------------------------------------------------
-# INGESTION (FINAL FIX)
+# INGESTION
 # -------------------------------------------------
 if uploads:
-    with st.spinner("Processing files..."):
+    with st.spinner("Processing submissions..."):
 
         def process_file(name, data):
             owner = extract_student_name(name)
-            ext = os.path.splitext(name)[1].lower()   # ✅ FINAL FIX
+            ext = os.path.splitext(name)[1].lower()
 
+            # Scratch / PictoBlox
             if ext in [".sb3", ".p3b"]:
                 logic = extract_project_logic(io.BytesIO(data))
                 if logic is not None:
@@ -130,6 +151,7 @@ if uploads:
                         **logic
                     })
 
+            # Posters
             elif ext in [".png", ".jpg", ".jpeg"]:
                 hist = image_hist(io.BytesIO(data))
                 if hist is not None:
@@ -138,11 +160,20 @@ if uploads:
                         "obj": io.BytesIO(data)
                     })
 
+            # Videos
             elif ext in [".mp4", ".mkv"]:
                 videos.append({
                     "owner": owner,
                     "hash": sha256(data),
                     "size": len(data)
+                })
+
+            # Documents
+            elif ext in [".pdf", ".odt", ".xml"]:
+                documents.append({
+                    "owner": owner,
+                    "hash": sha256(data),
+                    "type": ext.replace(".", "").upper()
                 })
 
         for up in uploads:
@@ -158,12 +189,18 @@ if uploads:
 # -------------------------------------------------
 # DASHBOARD
 # -------------------------------------------------
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Projects", len(projects))
 c2.metric("Students with Posters", len(images))
 c3.metric("Videos", len(videos))
+c4.metric("Documents", len(documents))
 
-tabs = st.tabs(["🧩 Code", "🖼️ Posters", "🎥 Videos"])
+tabs = st.tabs([
+    "🧩 Code",
+    "🖼️ Posters",
+    "🎥 Videos",
+    "📄 Documents"
+])
 
 # -------------------------------------------------
 # CODE ANALYSIS
@@ -176,23 +213,36 @@ with tabs[0]:
             if a["hash"] == b["hash"]:
                 st.error(f"🚨 Exact Copy: {a['owner']} == {b['owner']}")
             else:
-                total = max(sum(a["logic"].values()), sum(b["logic"].values()), 1)
-                sim = (sum((a["logic"] & b["logic"]).values()) / total) * 100
+                total = max(
+                    sum(a["logic"].values()),
+                    sum(b["logic"].values()),
+                    1
+                )
+                sim = (
+                    sum((a["logic"] & b["logic"]).values()) / total
+                ) * 100
                 if sim > 85:
-                    st.warning(f"⚠️ {a['owner']} vs {b['owner']} — {sim:.1f}% similarity")
+                    st.warning(
+                        f"⚠️ {a['owner']} vs {b['owner']} — "
+                        f"{sim:.1f}% similarity "
+                        f"(Sprites: {a['sprites']} vs {b['sprites']})"
+                    )
 
 # -------------------------------------------------
-# POSTER ANALYSIS (UNCHANGED)
+# POSTER ANALYSIS (WITH PREVIEW)
 # -------------------------------------------------
 with tabs[1]:
     owners = list(images.keys())
     if len(owners) < 2:
-        st.warning("Upload at least two students' posters.")
+        st.warning("Upload posters from at least two students.")
     else:
         for s1, s2 in combinations(owners, 2):
             for i1 in images[s1]:
                 for i2 in images[s2]:
-                    sim = cv2.compareHist(i1["hist"], i2["hist"], cv2.HISTCMP_CORREL)*100
+                    sim = cv2.compareHist(
+                        i1["hist"], i2["hist"],
+                        cv2.HISTCMP_CORREL
+                    ) * 100
                     if sim > 80:
                         st.info(f"🎨 {s1} vs {s2} — {sim:.1f}%")
                         col1, col2 = st.columns(2)
@@ -209,3 +259,21 @@ with tabs[2]:
         for a, b in combinations(videos, 2):
             if a["hash"] == b["hash"]:
                 st.error(f"🎥 Duplicate Video: {a['owner']} == {b['owner']}")
+
+# -------------------------------------------------
+# DOCUMENT ANALYSIS
+# -------------------------------------------------
+with tabs[3]:
+    if len(documents) < 2:
+        st.warning("Upload at least two documents (PDF / ODT / XML).")
+    else:
+        found = False
+        for a, b in combinations(documents, 2):
+            if a["hash"] == b["hash"]:
+                found = True
+                st.error(
+                    f"📄 Duplicate {a['type']} Document: "
+                    f"{a['owner']} == {b['owner']}"
+                )
+        if not found:
+            st.success("✅ No duplicate documents detected.")
